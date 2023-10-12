@@ -1,8 +1,15 @@
-haskell-th-abstraction (0.3.2.0-deepin1) unstable; urgency=medium
+haskell-th-abstraction (0.4.5.0-1) unstable; urgency=medium
 
-  * Rebuild
+  * Declare compliance with Debian policy 4.6.1
+  * New upstream release
 
- -- Deepin Packages Builder <packages@deepin.org>  Mon, 14 Nov 2022 17:42:00 +0800
+ -- Ilias Tsitsimpis <iliastsi@debian.org>  Sat, 22 Oct 2022 13:38:24 +0300
+
+haskell-th-abstraction (0.4.3.0-1) unstable; urgency=medium
+
+  * New upstream release
+
+ -- Clint Adams <clint@debian.org>  Tue, 14 Jun 2022 20:46:56 -0400
 
 haskell-th-abstraction (0.3.2.0-1) unstable; urgency=medium
 

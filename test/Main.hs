@@ -31,7 +31,7 @@ module Main (main) where
 import           Control.Monad (zipWithM_)
 #endif
 
-import           Control.Monad (unless)
+import           Control.Monad (unless, when)
 import qualified Data.Map as Map
 
 #if MIN_VERSION_base(4,7,0)
@@ -40,6 +40,7 @@ import           Data.Type.Equality ((:~:)(..))
 
 import           Language.Haskell.TH
 import           Language.Haskell.TH.Datatype
+import           Language.Haskell.TH.Datatype.TyVarBndr
 import           Language.Haskell.TH.Lib (starK)
 
 import           Harness
@@ -73,6 +74,7 @@ main =
      recordFamTest
      t46Test
      t73Test
+     t95Test
 #endif
      fixityLookupTest
 #if __GLASGOW_HASKELL__ >= 704
@@ -91,7 +93,10 @@ main =
      t80Test
 #endif
 #if MIN_VERSION_template_haskell(2,11,0)
-     t79Test
+     t79TestA
+#endif
+#if MIN_VERSION_template_haskell(2,19,0)
+     t79TestB
 #endif
 #if __GLASGOW_HASKELL__ >= 800
      t37Test
@@ -103,13 +108,15 @@ main =
      regressionTest44
      t63Test
      t70Test
+     t88Test
+     captureAvoidanceTest
 
 adt1Test :: IO ()
 adt1Test =
   $(do info <- reifyDatatype ''Adt1
 
        let names            = map mkName ["a","b"]
-           [aTvb,bTvb]      = map (\v -> KindedTV v starK) names
+           [aTvb,bTvb]      = map (\v -> kindedTV v starK) names
            vars@[aVar,bVar] = map (VarT . mkName) ["a","b"]
            [aSig,bSig]      = map (\v -> SigT v starK) vars
 
@@ -150,7 +157,7 @@ gadt1Test =
          DatatypeInfo
            { datatypeName = ''Gadt1
            , datatypeContext = []
-           , datatypeVars = [KindedTV a starK]
+           , datatypeVars = [kindedTV a starK]
            , datatypeInstTypes = [SigT aVar starK]
            , datatypeVariant = Datatype
            , datatypeCons =
@@ -197,7 +204,7 @@ gadtrec1Test =
          DatatypeInfo
            { datatypeName      = ''Gadtrec1
            , datatypeContext   = []
-           , datatypeVars      = [KindedTV a starK]
+           , datatypeVars      = [kindedTV a starK]
            , datatypeInstTypes = [SigT (VarT a) starK]
            , datatypeVariant   = Datatype
            , datatypeCons      =
@@ -210,7 +217,7 @@ equalTest =
   $(do info <- reifyDatatype ''Equal
 
        let names                 = map mkName ["a","b","c"]
-           [aTvb,bTvb,cTvb]      = map (\v -> KindedTV v starK) names
+           [aTvb,bTvb,cTvb]      = map (\v -> kindedTV v starK) names
            vars@[aVar,bVar,cVar] = map VarT names
            [aSig,bSig,cSig]      = map (\v -> SigT v starK) vars
 
@@ -256,7 +263,7 @@ showableTest =
            , datatypeCons      =
                [ ConstructorInfo
                    { constructorName       = 'Showable
-                   , constructorVars       = [KindedTV a starK]
+                   , constructorVars       = [kindedTV a starK]
                    , constructorContext    = [classPred ''Show [VarT a]]
                    , constructorFields     = [VarT a]
                    , constructorStrictness = [notStrictAnnot]
@@ -291,7 +298,7 @@ gadt2Test :: IO ()
 gadt2Test =
   $(do info <- reifyDatatype ''Gadt2
        let names            = map mkName ["a","b"]
-           [aTvb,bTvb]      = map (\v -> KindedTV v starK) names
+           [aTvb,bTvb]      = map (\v -> kindedTV v starK) names
            vars@[aVar,bVar] = map VarT names
            [aSig,bSig]      = map (\v -> SigT v starK) vars
            x                = mkName "x"
@@ -316,7 +323,7 @@ gadt2Test =
                , con { constructorName = 'Gadt2c2
                      , constructorContext = [equalPred aVar (AppT ListT bVar)] }
                , con { constructorName = 'Gadt2c3
-                     , constructorVars = [KindedTV x starK]
+                     , constructorVars = [kindedTV x starK]
                      , constructorContext =
                          [equalPred aVar (AppT ListT (VarT x))
                          ,equalPred bVar (AppT ListT (VarT x))] } ]
@@ -331,7 +338,7 @@ voidstosTest =
          DatatypeInfo
            { datatypeName      = ''VoidStoS
            , datatypeContext   = []
-           , datatypeVars      = [KindedTV g (arrowKCompat starK starK)]
+           , datatypeVars      = [kindedTV g (arrowKCompat starK starK)]
            , datatypeInstTypes = [SigT (VarT g) (arrowKCompat starK starK)]
            , datatypeVariant   = Datatype
            , datatypeCons      = []
@@ -425,7 +432,7 @@ t58Test =
            , datatypeCons      =
                [ ConstructorInfo
                    { constructorName       = mkName "MkFoo"
-                   , constructorVars       = [KindedTV a starK]
+                   , constructorVars       = [plainTV a]
                    , constructorContext    = []
                    , constructorFields     = [VarT a]
                    , constructorStrictness = [notStrictAnnot]
@@ -443,7 +450,7 @@ dataFamilyTest =
          DatatypeInfo
            { datatypeName      = ''DF
            , datatypeContext   = []
-           , datatypeVars      = [KindedTV a starK]
+           , datatypeVars      = [kindedTV a starK]
            , datatypeInstTypes = [AppT (ConT ''Maybe) (VarT a)]
            , datatypeVariant   = DataInstance
            , datatypeCons      =
@@ -466,7 +473,7 @@ ghc78bugTest =
          DatatypeInfo
            { datatypeName      = ''DF1
            , datatypeContext   = []
-           , datatypeVars      = [KindedTV c starK]
+           , datatypeVars      = [kindedTV c starK]
            , datatypeInstTypes = [SigT cVar starK]
            , datatypeVariant   = DataInstance
            , datatypeCons      =
@@ -490,8 +497,8 @@ quotedTest =
          DatatypeInfo
            { datatypeName      = mkName "Quoted"
            , datatypeContext   = []
-           , datatypeVars      = [KindedTV a starK]
-           , datatypeInstTypes = [SigT aVar starK]
+           , datatypeVars      = [plainTV a]
+           , datatypeInstTypes = [aVar]
            , datatypeVariant   = DataInstance
            , datatypeCons      =
                [ ConstructorInfo
@@ -515,9 +522,9 @@ polyTest =
            , datatypeContext   = []
            , datatypeVars      = [
 #if __GLASGOW_HASKELL__ >= 800
-                                 KindedTV k starK,
+                                 kindedTV k starK,
 #endif
-                                 KindedTV a kVar ]
+                                 kindedTV a kVar ]
            , datatypeInstTypes = [SigT (VarT a) kVar]
            , datatypeVariant   = DataInstance
            , datatypeCons      =
@@ -535,7 +542,7 @@ gadtFamTest :: IO ()
 gadtFamTest =
   $(do info <- reifyDatatype 'MkGadtFam1
        let names@[c,d,e,q]       = map mkName ["c","d","e","q"]
-           [cTvb,dTvb,eTvb,qTvb] = map (\v -> KindedTV v starK) names
+           [cTvb,dTvb,eTvb,qTvb] = map (\v -> kindedTV v starK) names
            [cTy,dTy,eTy,qTy]     = map VarT names
            [cSig,dSig]           = map (\v -> SigT v starK) [cTy,dTy]
        validateDI info
@@ -555,7 +562,7 @@ gadtFamTest =
                    , constructorVariant    = NormalConstructor }
                , ConstructorInfo
                    { constructorName       = '(:&&:)
-                   , constructorVars       = [KindedTV e starK]
+                   , constructorVars       = [kindedTV e starK]
                    , constructorContext    = [equalPred cTy (AppT ListT eTy)]
                    , constructorFields     = [eTy,dTy]
                    , constructorStrictness = [notStrictAnnot, notStrictAnnot]
@@ -581,7 +588,7 @@ gadtFamTest =
                    , constructorVariant    = NormalConstructor }
                , ConstructorInfo
                    { constructorName       = 'MkGadtFam5
-                   , constructorVars       = [KindedTV q starK]
+                   , constructorVars       = [kindedTV q starK]
                    , constructorContext    = [ equalPred cTy (ConT ''Bool)
                                              , equalPred dTy (ConT ''Bool)
                                              , equalPred qTy (ConT ''Char)
@@ -619,15 +626,14 @@ famLocalDecTest2 =
   $(do [dec] <- [d| data instance FamLocalDec2 Int (a, b) a = FamLocalDec2Int { fm0 :: (b, a), fm1 :: Int } |]
        info <- normalizeDec dec
        let names            = map mkName ["a", "b"]
-           [aTvb,bTvb]      = map (\v -> KindedTV v starK) names
+           [aTvb,bTvb]      = map plainTV names
            vars@[aVar,bVar] = map (VarT . mkName) ["a", "b"]
-           [aSig,bSig]      = map (\v -> SigT v starK) vars
        validateDI info
          DatatypeInfo
            { datatypeName      = ''FamLocalDec2
            , datatypeContext   = []
            , datatypeVars      = [aTvb,bTvb]
-           , datatypeInstTypes = [ConT ''Int, TupleT 2 `AppT` aVar `AppT` bVar, aSig]
+           , datatypeInstTypes = [ConT ''Int, TupleT 2 `AppT` aVar `AppT` bVar, aVar]
            , datatypeVariant   = DataInstance
            , datatypeCons      =
                [ ConstructorInfo
@@ -658,7 +664,7 @@ t73Test :: IO ()
 t73Test =
   $(do info <- reifyDatatype 'MkT73
        let b    = mkName "b"
-           bTvb = KindedTV b starK
+           bTvb = kindedTV b starK
            bVar = VarT b
        validateDI info
          DatatypeInfo
@@ -673,6 +679,30 @@ t73Test =
                    , constructorVars       = []
                    , constructorContext    = []
                    , constructorFields     = [bVar]
+                   , constructorStrictness = [notStrictAnnot]
+                   , constructorVariant    = NormalConstructor }]
+           }
+   )
+
+t95Test :: IO ()
+t95Test =
+  $(do info <- reifyDatatype 'MkT95
+       let a    = mkName "a"
+           aTvb = kindedTV a starK
+           aVar = VarT a
+       validateDI info
+         DatatypeInfo
+           { datatypeName      = ''T95
+           , datatypeContext   = []
+           , datatypeVars      = [aTvb]
+           , datatypeInstTypes = [AppT ListT aVar]
+           , datatypeVariant   = DataInstance
+           , datatypeCons      =
+               [ ConstructorInfo
+                   { constructorName       = 'MkT95
+                   , constructorVars       = []
+                   , constructorContext    = []
+                   , constructorFields     = [aVar]
                    , constructorStrictness = [notStrictAnnot]
                    , constructorVariant    = NormalConstructor }]
            }
@@ -706,7 +736,7 @@ reifyDatatypeWithConNameTest =
          DatatypeInfo
           { datatypeContext   = []
           , datatypeName      = ''Maybe
-          , datatypeVars      = [KindedTV a starK]
+          , datatypeVars      = [kindedTV a starK]
           , datatypeInstTypes = [SigT (VarT a) starK]
           , datatypeVariant   = Datatype
           , datatypeCons      =
@@ -742,9 +772,9 @@ importedEqualityTest =
            , datatypeName      = ''(:~:)
            , datatypeVars      = [
 #if __GLASGOW_HASKELL__ >= 800
-                                 KindedTV k starK,
+                                 kindedTV k starK,
 #endif
-                                 KindedTV a kKind, KindedTV b kKind]
+                                 kindedTV a kKind, kindedTV b kKind]
            , datatypeInstTypes = [SigT aVar kKind, SigT bVar kKind]
            , datatypeVariant   = Datatype
            , datatypeCons      =
@@ -765,7 +795,7 @@ kindSubstTest =
   $(do k1 <- newName "k1"
        k2 <- newName "k2"
        a  <- newName "a"
-       let ty = ForallT [KindedTV a (VarT k1)] [] (VarT a)
+       let ty = ForallT [kindedTVSpecified a (VarT k1)] [] (VarT a)
            substTy = applySubstitution (Map.singleton k1 (VarT k2)) ty
 
            checkFreeVars :: Type -> [Name] -> Q ()
@@ -785,9 +815,9 @@ t59Test =
                         -- Proxy (a :: k)
            expected = ForallT
 #if __GLASGOW_HASKELL__ >= 800
-                        [PlainTV k, KindedTV a (VarT k)]
+                        [plainTVSpecified k, kindedTVSpecified a (VarT k)]
 #else
-                        [KindedTV a (VarT k)]
+                        [kindedTVSpecified a (VarT k)]
 #endif
                         [] proxyAK
            actual = quantifyType proxyAK
@@ -814,10 +844,10 @@ t61Test =
        test (SigT (idAppT $ ConT ''Int) (idAppT StarT))
             (SigT (ConT ''Int) StarT)
 #if MIN_VERSION_template_haskell(2,10,0)
-       test (ForallT [KindedTV a (idAppT StarT)]
+       test (ForallT [kindedTVSpecified a (idAppT StarT)]
                      [idAppT (ConT ''Show `AppT` VarT a)]
                      (idAppT $ VarT a))
-            (ForallT [KindedTV a StarT]
+            (ForallT [kindedTVSpecified a StarT]
                      [ConT ''Show `AppT` VarT a]
                      (VarT a))
 #endif
@@ -826,6 +856,10 @@ t61Test =
             (InfixT (ConT ''Int) ''Either (ConT ''Int))
        test (ParensT (idAppT $ ConT ''Int))
             (ConT ''Int)
+#endif
+#if MIN_VERSION_template_haskell(2,19,0)
+       test (PromotedInfixT (idAppT $ ConT ''Int) '(:^:) (idAppT $ ConT ''Int))
+            (PromotedInfixT (ConT ''Int) '(:^:) (ConT ''Int))
 #endif
        [| return () |])
 
@@ -840,9 +874,9 @@ t66Test =
          DatatypeInfo
            { datatypeName      = mkName "Foo"
            , datatypeContext   = []
-           , datatypeVars      = [ KindedTV a starK ,KindedTV b starK
-                                 , KindedTV f fKind, KindedTV x starK ]
-           , datatypeInstTypes = [ SigT (VarT a) starK, SigT (VarT b) starK
+           , datatypeVars      = [ plainTV a, plainTV b
+                                 , kindedTV f fKind, kindedTV x starK ]
+           , datatypeInstTypes = [ VarT a, VarT b
                                  , SigT (VarT f) fKind, SigT (VarT x) starK ]
            , datatypeVariant   = Datatype
            , datatypeCons      =
@@ -860,7 +894,10 @@ t80Test :: IO ()
 t80Test = do
   let [k,a,b] = map mkName ["k","a","b"]
       -- forall k (a :: k) (b :: k). ()
-      t = ForallT [PlainTV k, KindedTV a (VarT k), KindedTV b (VarT k)] [] (ConT ''())
+      t = ForallT [ plainTVSpecified k
+                  , kindedTVSpecified a (VarT k)
+                  , kindedTVSpecified b (VarT k)
+                  ] [] (ConT ''())
 
       expected, actual :: [Name]
       expected = []
@@ -875,12 +912,30 @@ t80Test = do
 #endif
 
 #if MIN_VERSION_template_haskell(2,11,0)
-t79Test :: IO ()
-t79Test =
+t79TestA :: IO ()
+t79TestA =
   $(do let [a,b,c]  = map mkName ["a","b","c"]
-           t        = ForallT [KindedTV a (UInfixT (VarT b) ''(:+:) (VarT c))] []
+           t        = ForallT [kindedTVSpecified a (UInfixT (VarT b) ''(:+:) (VarT c))] []
                               (ConT ''())
-           expected = ForallT [KindedTV a (ConT ''(:+:) `AppT` VarT b `AppT` VarT c)] []
+           expected = ForallT [kindedTVSpecified a (ConT ''(:+:) `AppT` VarT b `AppT` VarT c)] []
+                              (ConT ''())
+       actual <- resolveInfixT t
+       unless (expected == actual) $
+         fail $ "resolveInfixT does not recur into the kinds of "
+             ++ "ForallT type variable binders: "
+             ++ unlines [ "Expected: " ++ pprint expected
+                        , "Actual:   " ++ pprint actual
+                        ]
+       [| return () |])
+#endif
+
+#if MIN_VERSION_template_haskell(2,19,0)
+t79TestB :: IO ()
+t79TestB =
+  $(do let [a,b,c]  = map mkName ["a","b","c"]
+           t        = ForallT [kindedTVSpecified a (PromotedUInfixT (VarT b) '(:^:) (VarT c))] []
+                              (ConT ''())
+           expected = ForallT [kindedTVSpecified a (PromotedT '(:^:) `AppT` VarT b `AppT` VarT c)] []
                               (ConT ''())
        actual <- resolveInfixT t
        unless (expected == actual) $
@@ -900,8 +955,8 @@ t37Test =
            [kVar,aVar] = map VarT names
            kSig        = SigT kVar starK
            aSig        = SigT aVar kVar
-           kTvb        = KindedTV k starK
-           aTvb        = KindedTV a kVar
+           kTvb        = kindedTV k starK
+           aTvb        = kindedTV a kVar
        validateDI infoA
          DatatypeInfo
            { datatypeContext   = []
@@ -965,13 +1020,13 @@ polyKindedExTyvarTest =
          DatatypeInfo
            { datatypeContext   = []
            , datatypeName      = ''T48
-           , datatypeVars      = [KindedTV a starK]
+           , datatypeVars      = [kindedTV a starK]
            , datatypeInstTypes = [SigT aVar starK]
            , datatypeVariant   = Datatype
            , datatypeCons      =
                [ ConstructorInfo
                    { constructorName       = 'MkT48
-                   , constructorVars       = [KindedTV x aVar]
+                   , constructorVars       = [kindedTV x aVar]
                    , constructorContext    = []
                    , constructorFields     = [ConT ''Prox `AppT` VarT x]
                    , constructorStrictness = [notStrictAnnot]
@@ -982,13 +1037,13 @@ polyKindedExTyvarTest =
        -- unfortunately does not check if the uses of `a` in datatypeVars and
        -- constructorVars are the same. We perform this check explicitly here.
        case info of
-         DatatypeInfo { datatypeVars = [KindedTV a1 starK]
+         DatatypeInfo { datatypeVars = [v1]
                       , datatypeCons =
-                          [ ConstructorInfo
-                              { constructorVars = [KindedTV _ (VarT a2)] } ] } ->
-           unless (a1 == a2) $
-             fail $ "Two occurrences of the same variable have different names: "
-                 ++ show [a1, a2]
+                          [ConstructorInfo { constructorVars = [v2] }] }
+           |  a1 <- tvName v1, starK == tvKind v1, VarT a2 <- tvKind v2
+           -> unless (a1 == a2) $
+                fail $ "Two occurrences of the same variable have different names: "
+                    ++ show [a1, a2]
        [| return () |]
    )
 
@@ -1036,8 +1091,8 @@ t63Test =
        t <- newName "T"
        let tauType = ArrowT `AppT` VarT a `AppT` (ArrowT `AppT` VarT b
                        `AppT` (ConT t `AppT` VarT a))
-           sigmaType = ForallT [PlainTV b] [] tauType
-           expected = ForallT [PlainTV a, PlainTV b] [] tauType
+           sigmaType = ForallT [plainTVSpecified b] [] tauType
+           expected = ForallT [plainTVSpecified a, plainTVSpecified b] [] tauType
            actual   = quantifyType sigmaType
        unless (expected == actual) $
          fail $ "quantifyType does not collapse consecutive foralls: "
@@ -1051,7 +1106,7 @@ t70Test =
   $(do a <- newName "a"
        b <- newName "b"
        let [aVar, bVar] = map VarT    [a, b]
-           [aTvb, bTvb] = map PlainTV [a, b]
+           [aTvb, bTvb] = map plainTV [a, b]
        let fvsABExpected = [aTvb, bTvb]
            fvsABActual   = freeVariablesWellScoped [aVar, bVar]
 
@@ -1069,3 +1124,26 @@ t70Test =
        check fvsBAExpected fvsBAActual
 
        [| return () |])
+
+t88Test :: IO ()
+t88Test =
+  $(do let unexpandedType = ConT ''Id
+           expected       = unexpandedType
+       actual <- resolveTypeSynonyms (ConT ''Id)
+       unless (expected == actual) $
+         fail $ "resolveTypeSynonyms incorrectly expands an undersaturated type synonym: "
+             ++ unlines [ "Expected: " ++ pprint expected
+                        , "Actual:   " ++ pprint actual
+                        ]
+       [| return () |])
+
+captureAvoidanceTest :: IO ()
+captureAvoidanceTest = do
+  let a        = mkName "a"
+      b        = mkName "b"
+      subst    = Map.singleton b (VarT a)
+      origTy   = ForallT [plainTVSpecified a] [] (VarT b)
+      substTy  = applySubstitution subst origTy
+      wrongTy  = ForallT [plainTVSpecified a] [] (VarT a)
+  when (substTy == wrongTy) $
+    fail $ "applySubstitution captures during substitution"

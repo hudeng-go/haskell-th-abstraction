@@ -1,5 +1,11 @@
 {-# LANGUAGE CPP #-}
 
+#if MIN_VERSION_template_haskell(2,12,0)
+{-# Language Safe #-}
+#elif __GLASGOW_HASKELL__ >= 702
+{-# Language Trustworthy #-}
+#endif
+
 {-|
 Module      : Language.Haskell.TH.Datatype.Internal
 Description : Backwards-compatible interface to reified information about datatypes.
@@ -15,9 +21,7 @@ module Language.Haskell.TH.Datatype.Internal where
 import Language.Haskell.TH.Syntax
 
 eqTypeName :: Name
-#if MIN_VERSION_base(4,9,0) && __GLASGOW_HASKELL__ < 807
-  -- TODO: Replace __GLASGOW_HASKELL__ < 807 with
-  -- !(MIN_VERSION_base(4,13,0)) once base-4.13 exists
+#if MIN_VERSION_base(4,9,0) && !(MIN_VERSION_base(4,13,0))
 eqTypeName = mkNameG_tc "base" "Data.Type.Equality" "~"
 #else
 eqTypeName = mkNameG_tc "ghc-prim" "GHC.Types" "~"

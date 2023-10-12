@@ -1,5 +1,45 @@
 # Revision history for th-abstraction
 
+## 0.4.5.0 -- 2022.09.12
+* Fix a bug in which data family declarations with interesting return kinds
+  (e.g., `data family F :: Type -> Type`) would be reified incorrectly when
+  using `reifyDatatype`.
+
+## 0.4.4.0 -- 2022.07.23
+* Support free variable substitution and infix resolution for
+  `PromotedInfixT` and `PromotedUInfixT` on `template-haskell-2.19.0.0` or
+  later.
+
+## 0.4.3.0 -- 2021.08.30
+* Make `applySubstitution` avoid capturing type variable binders when
+  substituting into `forall`s.
+* Fix a bug in which `resolveTypeSynonyms` would incorrectly expand type
+  synonyms that are not applied to enough arguments.
+* Allow the test suite to build with GHC 9.2.
+
+## 0.4.2.0 -- 2020-12-30
+* Explicitly mark modules as Safe (or Trustworthy for GHC versions prior to 8.4).
+
+## 0.4.1.0 -- 2020-12-09
+* Fix a bug in which `normalizeDec` would give incorrect kind annotations to
+  type variables in quoted `Dec`s. `normalizeDec` now leaves the kinds of
+  type variable binders alone.
+
+## 0.4.0.0 -- 2020-09-29
+* Adapt to the `TyVarBndr` data type gaining a new `flag` type parameter
+  (in `template-haskell-2.17.0.0`) to represent its specificity:
+  * Introduce a new `Language.Haskell.TH.Datatype.TyVarBndr` module that
+    defines `TyVarBndr_`, a backwards-compatible type synonym for `TyVarBndr`,
+    as well as backporting `TyVarBndrSpec`, `TyVarBndrUnit`, and `Specificity`.
+    This module also defines other useful functions for constructing and
+    manipulating `TyVarBndr`s.
+  * The types in `Language.Haskell.TH.Datatype` now use `TyVarBndr_`,
+    `TyVarBndrUnit`, and `TyVarBndrSpec` where appropriate. Technically, this
+    is not a breaking change, since all three are simple type synonyms around
+    `TyVarBndr`, but it is likely that you will need to update your
+    `th-abstraction`-using code anyway if it involves a `TyVarBndr`-consuming
+    function.
+
 ## 0.3.2.0 -- 2020-02-06
 * Support substituting into and extracting free variables from `ForallVisT`s
   on `template-haskell-2.16.0.0` (GHC 8.10) or later.

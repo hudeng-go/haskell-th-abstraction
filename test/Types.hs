@@ -31,6 +31,7 @@ import GHC.Exts (Constraint)
 
 import Language.Haskell.TH hiding (Type)
 import Language.Haskell.TH.Datatype
+import Language.Haskell.TH.Datatype.TyVarBndr
 import Language.Haskell.TH.Lib (starK)
 
 #if __GLASGOW_HASKELL__ >= 800
@@ -70,6 +71,8 @@ data StrictDemo = StrictDemo Int !Int {-# UNPACK #-} !Int
 
 type (:+:) = Either
 
+data MyPair a b = a :^: b
+
 -- Data families
 data family T43Fam
 
@@ -84,7 +87,7 @@ data family DF1 (a :: k)
 # else
 data family DF1 (a :: *)
 # endif
-data instance DF1 b = DF1 b
+data instance DF1 (b :: *) = DF1 b
 
 data family Quoted (a :: *)
 
@@ -113,6 +116,9 @@ data instance T46 (f (p :: *)) (f p) q = MkT46 q
 
 data family   T73 a   b
 data instance T73 Int b = MkT73 b
+
+data family T95 :: * -> *
+data instance T95 [a] = MkT95 a
 #endif
 
 #if __GLASGOW_HASKELL__ >= 704
@@ -171,7 +177,7 @@ gadtRecVanillaCI =
   where
     a             = VarT (mkName "a")
     names@[v1,v2] = map mkName ["v1","v2"]
-    [v1K,v2K]     = map (\n -> KindedTV n starK) names
+    [v1K,v2K]     = map (\n -> kindedTV n starK) names
 
 #if MIN_VERSION_template_haskell(2,7,0)
 gadtRecFamCI :: ConstructorInfo

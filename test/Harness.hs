@@ -27,6 +27,7 @@ import           Data.Map (Map)
 import           Data.Maybe
 import           Language.Haskell.TH
 import           Language.Haskell.TH.Datatype
+import           Language.Haskell.TH.Datatype.TyVarBndr
 import           Language.Haskell.TH.Lib (starK)
 
 validateDI :: DatatypeInfo -> DatatypeInfo -> ExpQ
@@ -39,7 +40,7 @@ validate :: (a -> a -> Either String ()) -> a -> a -> ExpQ
 validate equate x y = either fail (\_ -> [| return () |]) (equate x y)
 
 -- | If the arguments are equal up to renaming return @'Right' ()@,
--- otherwise return a string exlaining the mismatch.
+-- otherwise return a string explaining the mismatch.
 equateDI :: DatatypeInfo -> DatatypeInfo -> Either String ()
 equateDI dat1 dat2 =
   do check "datatypeName"          (nameBase . datatypeName)    dat1 dat2
@@ -74,7 +75,7 @@ equateCxt lbl pred1 pred2 =
      check (lbl ++ " equality") asEqualPred pred1 pred2
 
 -- | If the arguments are equal up to renaming return @'Right' ()@,
--- otherwise return a string exlaining the mismatch.
+-- otherwise return a string explaining the mismatch.
 equateCI :: ConstructorInfo -> ConstructorInfo -> Either String ()
 equateCI con1 con2 =
   do check "constructorName"       (nameBase . constructorName) con1 con2
@@ -110,12 +111,10 @@ equateCI con1 con2 =
         RecordConstructor fields -> RecordConstructor $ map (mkName . nameBase) fields
 
 -- Substitutes both type variable names and kinds.
-substIntoTyVarBndrs :: Map Name Type -> [TyVarBndr] -> [TyVarBndr]
+substIntoTyVarBndrs :: Map Name Type -> [TyVarBndr_ flag] -> [TyVarBndr_ flag]
 substIntoTyVarBndrs subst = map go
   where
-    go (PlainTV n)    = PlainTV $ substName subst n
-    go (KindedTV n k) = KindedTV (substName subst n)
-                                 (applySubstitution subst k)
+    go = mapTV (substName subst) id (applySubstitution subst)
 
     substName :: Map Name Type -> Name -> Name
     substName subst n = fromMaybe n $ do
@@ -124,11 +123,8 @@ substIntoTyVarBndrs subst = map go
         VarT n' -> Just n'
         _       -> Nothing
 
-bndrParams :: [TyVarBndr] -> [Type]
-bndrParams = map $ \bndr ->
-  case bndr of
-    KindedTV t k -> SigT (VarT t) k
-    PlainTV  t   -> VarT t
+bndrParams :: [TyVarBndr_ flag] -> [Type]
+bndrParams = map $ elimTV VarT (\n k -> SigT (VarT n) k)
 
 equateStrictness :: FieldStrictness -> FieldStrictness -> Either String ()
 equateStrictness fs1 fs2 =
