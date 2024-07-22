@@ -1,3 +1,9 @@
+haskell-th-abstraction (0.7.0.0-1deepin1) unstable; urgency=medium
+
+  * Update version to 0.7.0.0-1deepin1
+
+ -- hudeng <hudeng@deepin.org>  Mon, 22 Jul 2024 15:58:17 +0800
+
 haskell-th-abstraction (0.4.5.0-1) unstable; urgency=medium
 
   * Declare compliance with Debian policy 4.6.1

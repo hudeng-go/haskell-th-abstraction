@@ -9,7 +9,20 @@
 #endif
 
 #if __GLASGOW_HASKELL__ >= 800
+{-# Language DataKinds #-}
+# if __GLASGOW_HASKELL__ < 806
 {-# Language TypeInType #-}
+# endif
+#endif
+
+#if __GLASGOW_HASKELL__ >= 810
+{-# Language StandaloneKindSignatures #-}
+{-# Language TypeApplications #-}
+{-# Language UnliftedNewtypes #-}
+#endif
+
+#if MIN_VERSION_template_haskell(2,20,0)
+{-# Language TypeData #-}
 #endif
 
 {-|
@@ -36,6 +49,10 @@ import Language.Haskell.TH.Lib (starK)
 
 #if __GLASGOW_HASKELL__ >= 800
 import Data.Kind
+#endif
+
+#if __GLASGOW_HASKELL__ >= 810
+import GHC.Exts (Any, TYPE)
 #endif
 
 type Gadt1Int = Gadt1 Int
@@ -137,9 +154,15 @@ data PredSynT =
 data T37a (k :: Type) :: k -> Type where
   MkT37a :: T37a Bool a
 
+# if __GLASGOW_HASKELL__ >= 810
+type T37b :: k -> Type
+# endif
 data T37b (a :: k) where
   MkT37b :: forall (a :: Bool). T37b a
 
+# if __GLASGOW_HASKELL__ >= 810
+type T37c :: k -> Type
+# endif
 data T37c (a :: k) where
   MkT37c :: T37c Bool
 
@@ -150,6 +173,16 @@ data T48 :: Type -> Type where
 
 data T75 (k :: Type) where
   MkT75 :: forall k (a :: k). Prox a -> T75 k
+#endif
+
+#if MIN_VERSION_template_haskell(2,20,0)
+type data T100 = MkT100
+#endif
+
+#if __GLASGOW_HASKELL__ >= 810
+type T107 :: TYPE r
+newtype T107 where
+  MkT107 :: forall r. Any @(TYPE r) -> T107 @r
 #endif
 
 -- We must define these here due to Template Haskell staging restrictions

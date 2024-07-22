@@ -1,7 +1,11 @@
-{-# Language CPP, FlexibleContexts, TypeFamilies, KindSignatures, TemplateHaskell, GADTs #-}
+{-# Language CPP, FlexibleContexts, TypeFamilies, KindSignatures, TemplateHaskell, GADTs, RankNTypes, MagicHash #-}
 
 #if __GLASGOW_HASKELL__ >= 704
 {-# LANGUAGE ConstraintKinds #-}
+#endif
+
+#if __GLASGOW_HASKELL__ >= 800 && __GLASGOW_HASKELL__ < 806
+{-# Language TypeInType #-}
 #endif
 
 #if __GLASGOW_HASKELL__ >= 807
@@ -11,6 +15,14 @@
 
 #if MIN_VERSION_template_haskell(2,8,0)
 {-# Language PolyKinds #-}
+#endif
+
+#if MIN_VERSION_template_haskell(2,21,0)
+{-# Language TypeAbstractions #-}
+#endif
+
+#if MIN_VERSION_template_haskell(2,18,0)
+{-# LANGUAGE UnliftedDatatypes #-}
 #endif
 
 {-|
@@ -34,12 +46,25 @@ import           Control.Monad (zipWithM_)
 import           Control.Monad (unless, when)
 import qualified Data.Map as Map
 
+#if __GLASGOW_HASKELL__ >= 800
+import           Data.Kind
+#endif
 #if MIN_VERSION_base(4,7,0)
 import           Data.Type.Equality ((:~:)(..))
 #endif
 
-import           Language.Haskell.TH
-import           Language.Haskell.TH.Datatype
+#if __GLASGOW_HASKELL__ >= 810
+import           GHC.Exts (Any, RuntimeRep(..), TYPE)
+#endif
+#if __GLASGOW_HASKELL__ >= 902
+import           GHC.Exts (UnliftedType, Levity(..))
+#endif
+
+import           GHC.Exts (Array#)
+
+import qualified Language.Haskell.TH as TH (Type)
+import           Language.Haskell.TH hiding (Type)
+import           Language.Haskell.TH.Datatype as Datatype
 import           Language.Haskell.TH.Datatype.TyVarBndr
 import           Language.Haskell.TH.Lib (starK)
 
@@ -110,6 +135,27 @@ main =
      t70Test
      t88Test
      captureAvoidanceTest
+#if MIN_VERSION_template_haskell(2,20,0)
+     t100Test
+#endif
+#if MIN_VERSION_template_haskell(2,21,0)
+     t103Test
+#endif
+#if __GLASGOW_HASKELL__ >= 810
+     t107Test
+     t108Test
+#endif
+#if __GLASGOW_HASKELL__ >= 804
+     t110Test
+#endif
+#if MIN_VERSION_template_haskell(2,16,0)
+     unboxedTupleTest
+#endif
+#if MIN_VERSION_template_haskell(2,18,0)
+     unliftedGADTDecTest
+#endif
+     primTyConTest
+
 
 adt1Test :: IO ()
 adt1Test =
@@ -127,6 +173,7 @@ adt1Test =
            , datatypeVars = [aTvb,bTvb]
            , datatypeInstTypes = [aSig, bSig]
            , datatypeVariant = Datatype
+           , datatypeReturnKind = starK
            , datatypeCons =
                [ ConstructorInfo
                    { constructorName = 'Adtc1
@@ -160,6 +207,7 @@ gadt1Test =
            , datatypeVars = [kindedTV a starK]
            , datatypeInstTypes = [SigT aVar starK]
            , datatypeVariant = Datatype
+           , datatypeReturnKind = starK
            , datatypeCons =
                [ ConstructorInfo
                    { constructorName = 'Gadtc1
@@ -207,6 +255,7 @@ gadtrec1Test =
            , datatypeVars      = [kindedTV a starK]
            , datatypeInstTypes = [SigT (VarT a) starK]
            , datatypeVariant   = Datatype
+           , datatypeReturnKind = starK
            , datatypeCons      =
                [ con, con { constructorName = 'Gadtrecc2 } ]
            }
@@ -228,6 +277,7 @@ equalTest =
            , datatypeVars      = [aTvb, bTvb, cTvb]
            , datatypeInstTypes = [aSig, bSig, cSig]
            , datatypeVariant   = Datatype
+           , datatypeReturnKind = starK
            , datatypeCons      =
                [ ConstructorInfo
                    { constructorName       = 'Equalc
@@ -260,6 +310,7 @@ showableTest =
            , datatypeVars      = []
            , datatypeInstTypes = []
            , datatypeVariant   = Datatype
+           , datatypeReturnKind = starK
            , datatypeCons      =
                [ ConstructorInfo
                    { constructorName       = 'Showable
@@ -282,6 +333,7 @@ recordTest =
            , datatypeVars      = []
            , datatypeInstTypes = []
            , datatypeVariant   = Datatype
+           , datatypeReturnKind = starK
            , datatypeCons      =
                [ ConstructorInfo
                    { constructorName       = 'R1
@@ -317,6 +369,7 @@ gadt2Test =
            , datatypeVars      = [aTvb, bTvb]
            , datatypeInstTypes = [aSig, bSig]
            , datatypeVariant   = Datatype
+           , datatypeReturnKind = starK
            , datatypeCons      =
                [ con { constructorName = 'Gadt2c1
                      , constructorContext = [equalPred bVar (AppT ListT aVar)] }
@@ -341,6 +394,7 @@ voidstosTest =
            , datatypeVars      = [kindedTV g (arrowKCompat starK starK)]
            , datatypeInstTypes = [SigT (VarT g) (arrowKCompat starK starK)]
            , datatypeVariant   = Datatype
+           , datatypeReturnKind = starK
            , datatypeCons      = []
            }
   )
@@ -355,6 +409,7 @@ strictDemoTest =
            , datatypeVars      = []
            , datatypeInstTypes = []
            , datatypeVariant   = Datatype
+           , datatypeReturnKind = starK
            , datatypeCons      =
                [ ConstructorInfo
                    { constructorName       = 'StrictDemo
@@ -386,6 +441,7 @@ t43Test =
            , datatypeVars      = []
            , datatypeInstTypes = []
            , datatypeVariant   = Datatype
+           , datatypeReturnKind = starK
            , datatypeCons      =
                [ ConstructorInfo
                    { constructorName       = mkName "MkT43Plain"
@@ -405,6 +461,7 @@ t43Test =
            , datatypeVars      = []
            , datatypeInstTypes = []
            , datatypeVariant   = DataInstance
+           , datatypeReturnKind = starK
            , datatypeCons      =
                [ ConstructorInfo
                    { constructorName       = mkName "MkT43Fam"
@@ -429,6 +486,7 @@ t58Test =
            , datatypeVars      = []
            , datatypeInstTypes = []
            , datatypeVariant   = Datatype
+           , datatypeReturnKind = starK
            , datatypeCons      =
                [ ConstructorInfo
                    { constructorName       = mkName "MkFoo"
@@ -453,6 +511,7 @@ dataFamilyTest =
            , datatypeVars      = [kindedTV a starK]
            , datatypeInstTypes = [AppT (ConT ''Maybe) (VarT a)]
            , datatypeVariant   = DataInstance
+           , datatypeReturnKind = starK
            , datatypeCons      =
                [ ConstructorInfo
                    { constructorName       = 'DFMaybe
@@ -476,6 +535,7 @@ ghc78bugTest =
            , datatypeVars      = [kindedTV c starK]
            , datatypeInstTypes = [SigT cVar starK]
            , datatypeVariant   = DataInstance
+           , datatypeReturnKind = starK
            , datatypeCons      =
                [ ConstructorInfo
                    { constructorName       = 'DF1
@@ -500,6 +560,7 @@ quotedTest =
            , datatypeVars      = [plainTV a]
            , datatypeInstTypes = [aVar]
            , datatypeVariant   = DataInstance
+           , datatypeReturnKind = starK
            , datatypeCons      =
                [ ConstructorInfo
                    { constructorName       = mkName "MkQuoted"
@@ -527,6 +588,7 @@ polyTest =
                                  kindedTV a kVar ]
            , datatypeInstTypes = [SigT (VarT a) kVar]
            , datatypeVariant   = DataInstance
+           , datatypeReturnKind = starK
            , datatypeCons      =
                [ ConstructorInfo
                    { constructorName       = 'MkPoly
@@ -552,6 +614,7 @@ gadtFamTest =
            , datatypeVars      = [cTvb,dTvb]
            , datatypeInstTypes = [cSig,dSig]
            , datatypeVariant   = DataInstance
+           , datatypeReturnKind = starK
            , datatypeCons      =
                [ ConstructorInfo
                    { constructorName       = 'MkGadtFam1
@@ -610,6 +673,7 @@ famLocalDecTest1 =
            , datatypeVars      = []
            , datatypeInstTypes = [ConT ''Int]
            , datatypeVariant   = DataInstance
+           , datatypeReturnKind = starK
            , datatypeCons      =
                [ ConstructorInfo
                    { constructorName       = mkName "FamLocalDec1Int"
@@ -635,6 +699,7 @@ famLocalDecTest2 =
            , datatypeVars      = [aTvb,bTvb]
            , datatypeInstTypes = [ConT ''Int, TupleT 2 `AppT` aVar `AppT` bVar, aVar]
            , datatypeVariant   = DataInstance
+           , datatypeReturnKind = starK
            , datatypeCons      =
                [ ConstructorInfo
                    { constructorName       = mkName "FamLocalDec2Int"
@@ -673,6 +738,7 @@ t73Test =
            , datatypeVars      = [bTvb]
            , datatypeInstTypes = [ConT ''Int, SigT bVar starK]
            , datatypeVariant   = DataInstance
+           , datatypeReturnKind = starK
            , datatypeCons      =
                [ ConstructorInfo
                    { constructorName       = 'MkT73
@@ -697,6 +763,7 @@ t95Test =
            , datatypeVars      = [aTvb]
            , datatypeInstTypes = [AppT ListT aVar]
            , datatypeVariant   = DataInstance
+           , datatypeReturnKind = starK
            , datatypeCons      =
                [ ConstructorInfo
                    { constructorName       = 'MkT95
@@ -739,6 +806,7 @@ reifyDatatypeWithConNameTest =
           , datatypeVars      = [kindedTV a starK]
           , datatypeInstTypes = [SigT (VarT a) starK]
           , datatypeVariant   = Datatype
+          , datatypeReturnKind = starK
           , datatypeCons      =
               [ ConstructorInfo
                   { constructorName       = 'Nothing
@@ -777,6 +845,7 @@ importedEqualityTest =
                                  kindedTV a kKind, kindedTV b kKind]
            , datatypeInstTypes = [SigT aVar kKind, SigT bVar kKind]
            , datatypeVariant   = Datatype
+           , datatypeReturnKind = starK
            , datatypeCons      =
                [ ConstructorInfo
                    { constructorName       = 'Refl
@@ -798,7 +867,7 @@ kindSubstTest =
        let ty = ForallT [kindedTVSpecified a (VarT k1)] [] (VarT a)
            substTy = applySubstitution (Map.singleton k1 (VarT k2)) ty
 
-           checkFreeVars :: Type -> [Name] -> Q ()
+           checkFreeVars :: TH.Type -> [Name] -> Q ()
            checkFreeVars t freeVars =
              unless (freeVariables t == freeVars) $
                fail $ "free variables of " ++ show t ++ " should be " ++ show freeVars
@@ -830,7 +899,7 @@ t59Test =
 
 t61Test :: IO ()
 t61Test =
-  $(do let test :: Type -> Type -> Q ()
+  $(do let test :: TH.Type -> TH.Type -> Q ()
            test orig expected = do
              actual <- resolveTypeSynonyms orig
              unless (expected == actual) $
@@ -841,13 +910,13 @@ t61Test =
 
            idAppT = (ConT ''Id `AppT`)
            a = mkName "a"
-       test (SigT (idAppT $ ConT ''Int) (idAppT StarT))
-            (SigT (ConT ''Int) StarT)
+       test (SigT (idAppT $ ConT ''Int) (idAppT starK))
+            (SigT (ConT ''Int) starK)
 #if MIN_VERSION_template_haskell(2,10,0)
-       test (ForallT [kindedTVSpecified a (idAppT StarT)]
+       test (ForallT [kindedTVSpecified a (idAppT starK)]
                      [idAppT (ConT ''Show `AppT` VarT a)]
                      (idAppT $ VarT a))
-            (ForallT [kindedTVSpecified a StarT]
+            (ForallT [kindedTVSpecified a starK]
                      [ConT ''Show `AppT` VarT a]
                      (VarT a))
 #endif
@@ -879,6 +948,7 @@ t66Test =
            , datatypeInstTypes = [ VarT a, VarT b
                                  , SigT (VarT f) fKind, SigT (VarT x) starK ]
            , datatypeVariant   = Datatype
+           , datatypeReturnKind = starK
            , datatypeCons      =
                [ ConstructorInfo
                    { constructorName       = mkName "MkFoo"
@@ -964,6 +1034,7 @@ t37Test =
            , datatypeVars      = [kTvb, aTvb]
            , datatypeInstTypes = [kSig, aSig]
            , datatypeVariant   = Datatype
+           , datatypeReturnKind = starK
            , datatypeCons      =
                [ ConstructorInfo
                    { constructorName       = 'MkT37a
@@ -982,6 +1053,7 @@ t37Test =
            , datatypeVars      = [kTvb, aTvb]
            , datatypeInstTypes = [aSig]
            , datatypeVariant   = Datatype
+           , datatypeReturnKind = starK
            , datatypeCons      =
                [ ConstructorInfo
                    { constructorName       = 'MkT37b
@@ -1000,6 +1072,7 @@ t37Test =
            , datatypeVars      = [kTvb, aTvb]
            , datatypeInstTypes = [aSig]
            , datatypeVariant   = Datatype
+           , datatypeReturnKind = starK
            , datatypeCons      =
                [ ConstructorInfo
                    { constructorName       = 'MkT37c
@@ -1023,6 +1096,7 @@ polyKindedExTyvarTest =
            , datatypeVars      = [kindedTV a starK]
            , datatypeInstTypes = [SigT aVar starK]
            , datatypeVariant   = Datatype
+           , datatypeReturnKind = starK
            , datatypeCons      =
                [ ConstructorInfo
                    { constructorName       = 'MkT48
@@ -1147,3 +1221,245 @@ captureAvoidanceTest = do
       wrongTy  = ForallT [plainTVSpecified a] [] (VarT a)
   when (substTy == wrongTy) $
     fail $ "applySubstitution captures during substitution"
+
+#if MIN_VERSION_template_haskell(2,20,0)
+t100Test :: IO ()
+t100Test =
+  $(do let expectedInfo =
+             DatatypeInfo
+               { datatypeName = ''T100
+               , datatypeContext = []
+               , datatypeVars = []
+               , datatypeInstTypes = []
+               , datatypeVariant = Datatype.TypeData
+               , datatypeReturnKind = starK
+               , datatypeCons =
+                   [ ConstructorInfo
+                       { constructorName = ''MkT100
+                       , constructorContext = []
+                       , constructorVars = []
+                       , constructorFields = []
+                       , constructorStrictness = []
+                       , constructorVariant = NormalConstructor }
+                   ]
+               }
+
+       t100Info <- reifyDatatype ''T100
+       validateDI t100Info expectedInfo
+
+       mkT100Info <- reifyDatatype ''MkT100
+       validateDI mkT100Info expectedInfo
+   )
+#endif
+
+#if MIN_VERSION_template_haskell(2,21,0)
+t103Test :: IO ()
+t103Test =
+  $(do [dec] <- [d| data T102 @k (a :: k) |]
+       info <- normalizeDec dec
+       let k = mkName "k"
+           a = mkName "a"
+       validateDI info
+         DatatypeInfo
+           { datatypeName      = mkName "T102"
+           , datatypeContext   = []
+           , datatypeVars      = [plainTV k, kindedTV a (VarT k)]
+           , datatypeInstTypes = [SigT (VarT a) (VarT k)]
+           , datatypeVariant   = Datatype
+           , datatypeReturnKind = starK
+           , datatypeCons      = []
+           }
+   )
+#endif
+
+#if __GLASGOW_HASKELL__ >= 810
+t107Test :: IO ()
+t107Test =
+  $(do info <- reifyDatatype ''T107
+       let r = mkName "r"
+       validateDI info
+         DatatypeInfo
+           { datatypeName      = mkName "T107"
+           , datatypeContext   = []
+           , datatypeVars      = [kindedTV r (ConT ''RuntimeRep)]
+           , datatypeInstTypes = []
+           , datatypeVariant   = Newtype
+           , datatypeReturnKind = ConT ''TYPE `AppT` VarT r
+           , datatypeCons      =
+               [ ConstructorInfo
+                   { constructorName       = mkName "MkT107"
+                   , constructorVars       = []
+                   , constructorContext    = []
+                   , constructorFields     = [ConT ''Any `SigT` (ConT ''TYPE `AppT` VarT r)]
+                   , constructorStrictness = [notStrictAnnot]
+                   , constructorVariant    = NormalConstructor
+                   }
+               ]
+           }
+   )
+
+t108Test :: IO ()
+t108Test =
+  $(do [dec] <- [d| data T108 :: forall k -> k -> Type where
+                      MkT108 :: forall k (a :: k). T108 k a
+                  |]
+       info <- normalizeDec dec
+       let k = mkName "k"
+           a = mkName "a"
+       validateDI info
+         DatatypeInfo
+           { datatypeName      = mkName "T108"
+           , datatypeContext   = []
+           , datatypeVars      = [plainTV k, kindedTV a (VarT k)]
+           , datatypeInstTypes = [VarT k, SigT (VarT a) (VarT k)]
+           , datatypeVariant   = Datatype
+           , datatypeReturnKind = starK
+           , datatypeCons      =
+               [ ConstructorInfo
+                   { constructorName       = mkName "MkT108"
+                   , constructorVars       = []
+                   , constructorContext    = []
+                   , constructorFields     = []
+                   , constructorStrictness = []
+                   , constructorVariant    = NormalConstructor
+                   }
+               ]
+           }
+   )
+#endif
+
+#if __GLASGOW_HASKELL__ >= 804
+t110Test :: IO ()
+t110Test =
+  $(do [dec] <- [d| data T110 :: forall k. k -> Type where
+                      MkT110 :: forall k (a :: k). T110 a
+                  |]
+       info <- normalizeDec dec
+       let k = mkName "k"
+           a = mkName "a"
+       validateDI info
+         DatatypeInfo
+           { datatypeName      = mkName "T110"
+           , datatypeContext   = []
+           , datatypeVars      = [plainTV k, kindedTV a (VarT k)]
+           , datatypeInstTypes = [SigT (VarT a) (VarT k)]
+           , datatypeVariant   = Datatype
+           , datatypeReturnKind = starK
+           , datatypeCons      =
+               [ ConstructorInfo
+                   { constructorName       = mkName "MkT110"
+                   , constructorVars       = []
+                   , constructorContext    = []
+                   , constructorFields     = []
+                   , constructorStrictness = []
+                   , constructorVariant    = NormalConstructor
+                   }
+               ]
+           }
+   )
+#endif
+
+#if MIN_VERSION_template_haskell(2,16,0)
+unboxedTupleTest :: IO ()
+unboxedTupleTest =
+  $(do k0 <- newName "k0"
+       k1 <- newName "k1"
+       a <- newName "a"
+       b  <- newName "b"
+       tupleInfo <- reifyDatatype (unboxedTupleTypeName 2)
+       validateDI tupleInfo
+         DatatypeInfo 
+           { datatypeContext = []
+           , datatypeName = unboxedTupleTypeName 2
+           , datatypeVars = [kindedTV k0 starK
+                            ,kindedTV a (AppT (ConT ''TYPE) (VarT k0 ))
+                            ,kindedTV k1 starK
+                            ,kindedTV b (AppT (ConT ''TYPE) (VarT k1))]
+           , datatypeInstTypes = [SigT (VarT a) (AppT (ConT ''TYPE) (VarT k0))
+                                 ,SigT (VarT b) (AppT (ConT ''TYPE) (VarT k1))]
+           , datatypeVariant = Datatype
+           , datatypeReturnKind =
+               AppT
+                 (ConT ''TYPE)
+                 (AppT
+                    (PromotedT 'TupleRep)
+                    (AppT
+                      (AppT PromotedConsT (VarT k0))
+                        (AppT
+                          (AppT PromotedConsT (VarT k1))
+                          (SigT PromotedNilT (AppT ListT (ConT ''RuntimeRep))))))
+           , datatypeCons =
+             [ ConstructorInfo
+               { constructorName = unboxedTupleDataName 2
+               , constructorVars = []
+               , constructorContext = []
+               , constructorFields = [VarT a, VarT b]
+               , constructorStrictness = [notStrictAnnot, notStrictAnnot]
+               , constructorVariant = NormalConstructor}]
+          }
+  )
+#endif
+
+#if MIN_VERSION_template_haskell(2,18,0)
+unliftedGADTDecTest :: IO ()
+unliftedGADTDecTest =
+  $(do a <- newName "a"
+       s <- newName "s"
+       [dec] <- [d| data UnliftedGADT a :: UnliftedType where
+                      UnliftedGADT :: Show s => s -> a -> UnliftedGADT a
+                |]
+       info <- normalizeDec dec
+       validateDI info
+         DatatypeInfo
+           { datatypeContext = []
+           , datatypeName = mkName "UnliftedGADT"
+           , datatypeVars = [plainTV a]
+           , datatypeInstTypes = [VarT a]
+           , datatypeVariant = Datatype
+           , datatypeReturnKind = ConT ''TYPE `AppT` (PromotedT 'BoxedRep `AppT` PromotedT 'Unlifted)
+           , datatypeCons =
+               [ConstructorInfo
+                  {constructorName = mkName "UnliftedGADT"
+                  , constructorVars = [plainTV s]
+                  , constructorContext = [AppT (ConT ''Show) (VarT s)]
+                  , constructorFields = [VarT s,VarT a]
+                  , constructorStrictness = [notStrictAnnot, notStrictAnnot]
+                  , constructorVariant = NormalConstructor}
+               ]
+           }
+   )
+#endif
+
+
+primTyConTest :: IO ()
+primTyConTest =
+  $(do l <- newName "l"
+       a <- newName "a"
+       info <- reifyDatatype ''Array#
+       validateDI info
+         DatatypeInfo
+           { datatypeContext = []
+           , datatypeName = mkName "Array#"
+#if MIN_VERSION_template_haskell(2,19,0)
+           , datatypeVars = [kindedTV l (ConT ''Levity)
+                            , kindedTV a (ConT ''TYPE `AppT` (PromotedT 'BoxedRep `AppT` VarT l))
+                            ]
+           , datatypeInstTypes = [SigT (VarT a) (ConT ''TYPE `AppT` (PromotedT 'BoxedRep `AppT` VarT l))]
+           , datatypeReturnKind = ConT ''TYPE `AppT` (PromotedT 'BoxedRep `AppT` PromotedT 'Unlifted)
+#elif MIN_VERSION_template_haskell(2,18,0)
+           , datatypeVars = [ kindedTV a StarT]
+           , datatypeInstTypes = [SigT (VarT a) StarT]
+           , datatypeReturnKind = ConT ''TYPE `AppT` (PromotedT 'BoxedRep `AppT` PromotedT 'Unlifted)
+#elif MIN_VERSION_template_haskell(2,16,0)
+           , datatypeVars = [kindedTV a starK]
+           , datatypeInstTypes = [SigT (VarT a) starK]
+           , datatypeReturnKind = ConT ''TYPE `AppT` PromotedT 'UnliftedRep
+#else
+           , datatypeVars = [kindedTV a starK]
+           , datatypeInstTypes = [SigT (VarT a) starK]
+           , datatypeReturnKind = starK
+#endif
+           , datatypeVariant = Datatype
+           , datatypeCons = []
+           }
+   )

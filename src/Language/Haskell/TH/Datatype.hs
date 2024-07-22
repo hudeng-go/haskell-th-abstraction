@@ -1,4 +1,4 @@
-{-# Language CPP, DeriveDataTypeable #-}
+{-# Language CPP, DeriveDataTypeable, ScopedTypeVariables, TupleSections #-}
 
 #if MIN_VERSION_base(4,4,0)
 #define HAS_GENERICS
@@ -31,6 +31,7 @@ Sample output for @'reifyDatatype' ''Maybe@
  , 'datatypeVars'      = [ 'KindedTV' a_3530822107858468866 () 'StarT' ]
  , 'datatypeInstTypes' = [ 'SigT' ('VarT' a_3530822107858468866) 'StarT' ]
  , 'datatypeVariant'   = 'Datatype'
+ , 'datatypeReturnKind' = 'StarT'
  , 'datatypeCons'      =
      [ 'ConstructorInfo'
          { 'constructorName'       = GHC.Base.Nothing
@@ -173,6 +174,11 @@ import           Data.Monoid (Monoid(..))
 --   @'datatypeInstTypes' = ['SigT' ('VarT' a) ('VarT' k)]@, since there is
 --   only one explicit type argument to @Proxy@.
 --
+--   The same outcome would occur if @Proxy@ were declared using
+--   @TypeAbstractions@, i.e., if it were declared as
+--   @data Proxy \@k (a :: k) = MkProxy@. The 'datatypeInstTypes' would /not/
+--   include a separate type for @\@k@.
+--
 -- * For @data instance@s and @newtype instance@s of data families,
 --   'datatypeVars' and 'datatypeInstTypes' can be quite different. Here is
 --   an example to illustrate the difference:
@@ -197,6 +203,10 @@ data DatatypeInfo = DatatypeInfo
   , datatypeVars      :: [TyVarBndrUnit]   -- ^ Type parameters
   , datatypeInstTypes :: [Type]            -- ^ Argument types
   , datatypeVariant   :: DatatypeVariant   -- ^ Extra information
+  , datatypeReturnKind:: Kind              -- ^ Return 'Kind' of the type.
+                                           --
+                                           -- If normalization is unable to determine the return kind,
+                                           -- then this is conservatively set to @StarT@.
   , datatypeCons      :: [ConstructorInfo] -- ^ Normalize constructor information
   }
   deriving (Show, Eq, Typeable, Data
@@ -207,10 +217,31 @@ data DatatypeInfo = DatatypeInfo
 
 -- | Possible variants of data type declarations.
 data DatatypeVariant
-  = Datatype        -- ^ Type declared with @data@
-  | Newtype         -- ^ Type declared with @newtype@
-  | DataInstance    -- ^ Type declared with @data instance@
-  | NewtypeInstance -- ^ Type declared with @newtype instance@
+  = Datatype        -- ^ Type declared with @data@ or a primitive datatype.
+  | Newtype         -- ^ Type declared with @newtype@.
+                    --
+                    --   A 'DatatypeInfo' that uses 'Newtype' will uphold the
+                    --   invariant that there will be exactly one
+                    --   'ConstructorInfo' in the 'datatypeCons'.
+  | DataInstance    -- ^ Type declared with @data instance@.
+  | NewtypeInstance -- ^ Type declared with @newtype instance@.
+                    --
+                    --   A 'DatatypeInfo' that uses 'NewtypeInstance' will
+                    --   uphold the invariant that there will be exactly one
+                    --   'ConstructorInfo' in the 'datatypeCons'.
+  | TypeData        -- ^ Type declared with @type data@.
+                    --
+                    --   A 'DatatypeInfo' that uses 'TypeData' will uphold the
+                    --   following invariants:
+                    --
+                    --   * The 'datatypeContext' will be empty.
+                    --
+                    --   * None of the 'constructorVariant's in any of the
+                    --     'datatypeCons' will be 'RecordConstructor'.
+                    --
+                    --   * Each of the 'constructorStrictness' values in each
+                    --     of the 'datatypeCons' will be equal to
+                    --     'notStrictAnnot'.
   deriving (Show, Read, Eq, Ord, Typeable, Data
 #ifdef HAS_GENERICS
            ,Generic
@@ -351,6 +382,9 @@ datatypeType di
 -- Trying to categorize which constraints need homogeneous or heterogeneous
 -- equality is tricky, so we leave that task to users of this library.
 --
+-- Primitive types (other than unboxed sums and tuples) will have
+-- no @datatypeCons@ in their normalization.
+--
 -- This function will apply various bug-fixes to the output of the underlying
 -- @template-haskell@ library in order to provide a view of datatypes in
 -- as uniform a way as possible.
@@ -411,7 +445,21 @@ normalizeInfo = normalizeInfo' "normalizeInfo" isn'tReified
 normalizeInfo' :: String -> IsReifiedDec -> Info -> Q DatatypeInfo
 normalizeInfo' entry reifiedDec i =
   case i of
-    PrimTyConI{}                      -> bad "Primitive type not supported"
+    (PrimTyConI name arity unlifted) -> do
+#if MIN_VERSION_template_haskell(2,16,0)
+      -- We provide a minimal @DataD@ because, since TH 2.16,
+      -- we can rely on the call to @reifyType@ in
+      -- @normalizeDecFor@ to fill in the missing details.
+      normalizeDecFor reifiedDec $ DataD [] name [] Nothing [] []
+#else
+      -- On older versions, we are very limited in what we can deduce.
+      -- All we know is the appropriate amount of type constructors.
+      -- Note that this will default all kinds to @Type@, which is all
+      -- that is available anyway.
+      args <- replicateM arity (newName "x")
+      dec <- dataDCompat (return []) name (map plainTV args) [] []
+      normalizeDecFor reifiedDec dec
+#endif
     ClassI{}                          -> bad "Class not supported"
 #if MIN_VERSION_template_haskell(2,11,0)
     FamilyI DataFamilyD{} _           ->
@@ -620,12 +668,12 @@ repairDataFam _ instD = return instD
 -- The @F@ has no type variable binders in its @data family@ declaration, and
 -- it has a return kind of @Type -> Type@. As a result, we pair up @Type@ with
 -- @VarT a@ to get @SigT a (ConT ''Type)@.
-repairVarKindsWith :: [TyVarBndrUnit] -> Maybe Kind -> [Type] -> Q [Type]
+repairVarKindsWith :: [TyVarBndrVis] -> Maybe Kind -> [Type] -> Q [Type]
 repairVarKindsWith tvbs mbKind ts = do
   extra_tvbs <- mkExtraKindBinders $ fromMaybe starK mbKind
   -- This list should be the same length as @ts@. If it isn't, something has
   -- gone terribly wrong.
-  let tvbs' = tvbs ++ extra_tvbs
+  let tvbs' = changeTVFlags () tvbs ++ extra_tvbs
   return $ zipWith stealKindForType tvbs' ts
 
 -- If a VarT is missing an explicit kind signature, steal it from a TyVarBndr.
@@ -656,6 +704,10 @@ normalizeDec = normalizeDecFor isn'tReified
 normalizeDecFor :: IsReifiedDec -> Dec -> Q DatatypeInfo
 normalizeDecFor isReified dec =
   case dec of
+#if MIN_VERSION_template_haskell(2,20,0)
+    TypeDataD name tyvars mbKind cons ->
+      normalizeDataD [] name tyvars mbKind cons TypeData
+#endif
 #if MIN_VERSION_template_haskell(2,12,0)
     NewtypeD context name tyvars mbKind con _derives ->
       normalizeDataD context name tyvars mbKind [con] Newtype
@@ -703,22 +755,76 @@ normalizeDecFor isReified dec =
       | otherwise
       = return di
 
-    -- Given a data type's instance types and kind, compute its free variables.
-    datatypeFreeVars :: [Type] -> Maybe Kind -> [TyVarBndrUnit]
-    datatypeFreeVars instTys mbKind =
-      freeVariablesWellScoped $ instTys ++
-#if MIN_VERSION_template_haskell(2,8,0)
-                                           maybeToList mbKind
+    -- If a data type lacks an explicit return kind, use `reifyType` to compute
+    -- it, as described in step (1) of Note [Tricky result kinds].
+    normalizeMbKind :: Name -> [Type] -> Maybe Kind -> Q (Maybe Kind)
+    normalizeMbKind _name _instTys mbKind@(Just _) = return mbKind
+    normalizeMbKind name instTys Nothing = do
+#if MIN_VERSION_template_haskell(2,16,0)
+      mbReifiedKind <- return Nothing `recover` fmap Just (reifyType name)
+      T.mapM normalizeKind mbReifiedKind
+      where
+        normalizeKind :: Kind -> Q Kind
+        normalizeKind k = do
+          k' <- resolveKindSynonyms k
+          -- Step (1) in Note [Tricky result kinds]
+          -- (Wrinkle: normalizeMbKind argument unification).
+          let (args, res) = unravelKindUpTo instTys k'
+              -- Step (2) in Note [Tricky result kinds]
+              -- (Wrinkle: normalizeMbKind argument unification).
+              (instTys', args') =
+                unzip $
+                mapMaybe
+                  (\(instTy, arg) ->
+                    case arg of
+                      VisFADep tvb -> Just (instTy, bndrParam tvb)
+                      VisFAAnon k  -> (, k) <$> sigTMaybeKind instTy)
+                  args
+              (subst, _) = mergeArguments args' instTys'
+          -- Step (3) in Note [Tricky result kinds]
+          -- (Wrinkle: normalizeMbKind argument unification).
+          pure $ applySubstitution (VarT <$> subst) res
 #else
-                                           [] -- No kind variables
+      return Nothing
 #endif
 
-    normalizeDataD :: Cxt -> Name -> [TyVarBndrUnit] -> Maybe Kind
+    -- Given a data type declaration's binders, as well as the arguments and
+    -- result of its explicit return kind, compute the free type variables.
+    -- For example, this:
+    --
+    -- @
+    -- data T (a :: j) :: forall k. Maybe k -> Type
+    -- @
+    --
+    -- Would yield:
+    --
+    -- @
+    -- [j, (a :: j), k, (b :: k)]
+    -- @
+    --
+    -- Where @b@ is a fresh name that is generated in 'mkExtraFunArgForalls'.
+    datatypeFreeVars :: [TyVarBndr_ flag] -> FunArgs -> Kind -> [TyVarBndrUnit]
+    datatypeFreeVars declBndrs kindArgs kindRes =
+      freeVariablesWellScoped $ bndrParams declBndrs ++
+#if MIN_VERSION_template_haskell(2,8,0)
+        funArgTys kindArgs ++ [kindRes]
+#else
+        [] -- No kind variables
+#endif
+
+    normalizeDataD :: Cxt -> Name -> [TyVarBndrVis] -> Maybe Kind
                    -> [Con] -> DatatypeVariant -> Q DatatypeInfo
-    normalizeDataD context name tyvars mbKind cons variant =
-      let params = bndrParams tyvars in
-      normalize' context name (datatypeFreeVars params mbKind)
-                 params mbKind cons variant
+    normalizeDataD context name tyvars mbKind cons variant = do
+      -- NB: use `filter isRequiredTvb tyvars` here. It is possible for some of
+      -- the `tyvars` to be `BndrInvis` if the data type is quoted, e.g.,
+      --
+      --   data D @k (a :: k)
+      --
+      -- th-abstraction adopts the convention that all binders in the
+      -- 'datatypeInstTypes' are required, so we want to filter out the `@k`.
+      let tys = bndrParams $ filter isRequiredTvb tyvars
+      mbKind' <- normalizeMbKind name tys mbKind
+      normalize' context name tyvars tys mbKind' cons variant
 
     normalizeDataInstDPostTH2'15
       :: String -> Cxt -> Maybe [TyVarBndrUnit] -> Type -> Maybe Kind
@@ -726,28 +832,116 @@ normalizeDecFor isReified dec =
     normalizeDataInstDPostTH2'15 what context mbTyvars nameInstTys
                                  mbKind cons variant =
       case decomposeType nameInstTys of
-        ConT name :| instTys ->
+        ConT name :| instTys -> do
+          mbKind' <- normalizeMbKind name instTys mbKind
           normalize' context name
-                     (fromMaybe (datatypeFreeVars instTys mbKind) mbTyvars)
-                     instTys mbKind cons variant
+                     (fromMaybe (freeVariablesWellScoped instTys) mbTyvars)
+                     instTys mbKind' cons variant
         _ -> fail $ "Unexpected " ++ what ++ " instance head: " ++ pprint nameInstTys
 
     normalizeDataInstDPreTH2'15
       :: Cxt -> Name -> [Type] -> Maybe Kind
       -> [Con] -> DatatypeVariant -> Q DatatypeInfo
-    normalizeDataInstDPreTH2'15 context name instTys mbKind cons variant =
-      normalize' context name (datatypeFreeVars instTys mbKind)
-                 instTys mbKind cons variant
+    normalizeDataInstDPreTH2'15 context name instTys mbKind cons variant = do
+      mbKind' <- normalizeMbKind name instTys mbKind
+      normalize' context name (freeVariablesWellScoped instTys)
+                 instTys mbKind' cons variant
 
     -- The main worker of this function.
-    normalize' :: Cxt -> Name -> [TyVarBndrUnit] -> [Type] -> Maybe Kind
+    normalize' :: Cxt -> Name -> [TyVarBndr_ flag] -> [Type] -> Maybe Kind
                -> [Con] -> DatatypeVariant -> Q DatatypeInfo
     normalize' context name tvbs instTys mbKind cons variant = do
-      extra_tvbs <- mkExtraKindBinders $ fromMaybe starK mbKind
-      let tvbs'    = tvbs ++ extra_tvbs
-          instTys' = instTys ++ bndrParams extra_tvbs
-      dec <- normalizeDec' isReified context name tvbs' instTys' cons variant
+      -- If `mbKind` is *still* Nothing after all of the work done in
+      -- normalizeMbKind, then conservatively assume that the return kind is
+      -- `Type`. See step (1) of Note [Tricky result kinds].
+      let kind = fromMaybe starK mbKind
+      kind' <- resolveKindSynonyms kind
+      let (kindArgs, kindRes) = unravelKind kind'
+      (extra_vis_tvbs, kindArgs') <- mkExtraFunArgForalls kindArgs
+      let tvbs'    = datatypeFreeVars tvbs kindArgs' kindRes
+          instTys' = instTys ++ bndrParams extra_vis_tvbs
+      dec <- normalizeDec' isReified context name tvbs' instTys' kindRes cons variant
       repair13618' $ giveDIVarsStarKinds isReified dec
+
+{-
+Note [Tricky result kinds]
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+Consider this example, which uses UnliftedNewtypes:
+
+  type T :: TYPE r
+  newtype T where
+    MkT :: forall r. Any @(TYPE r) -> T @r
+
+This has one universally quantified type variable `r`, but making
+`reifyDatatype ''T` realize this is surprisingly tricky. There root of the
+trickiness is the fact that `Language.Haskell.TH.reify ''T` will yield this:
+
+  newtype T where
+    MkT :: forall r. (Any :: TYPE r) -> (T :: TYPE r)
+
+In particular, note that:
+
+1. `reify` does not give `T` an explicit return kind of `TYPE r`. This is bad,
+   because without this, we cannot conclude that `r` is universally quantified.
+2. The reified type of the `MkT` constructor uses explicit kind annotations
+   instead of visible kind applications. That is, the return type is
+   `T :: TYPE r` instead of `T @r`. This makes it even trickier to figure out
+   that `r` is universally quantified, as `r` does not appear directly
+   underneath an application of `T`.
+
+We resolve each of these issues as follows:
+
+1. In `normalizeDecFor.normalizeMbKind`, we attempt to use `reifyType` to look
+   up the return kind of the data type. In the `T` example above, this suffices
+   to conclude that `T :: TYPE r`. `reifyType` won't always work (e.g., when
+   using `normalizeDec` on a data type without an explicit return kind), so for
+   those situations, we conservatively assume that the data type has return kind
+   `Type`.
+
+   The implementation of `normalizeMbKind` is somewhat involved. See
+   "Wrinkle: normalizeMbKind argument unification" below for more details.
+2. After determining the result kind `K1`, we pass `K1` through to
+   `normalizeGadtC`. In that function, we check if the return type of the data
+   constructor is of the form `Ty :: K2`, and if so, we attempt to unify `K1`
+   and `K2` by passing through to `mergeArguments`. In the example above, this
+   lets us conclude that the `r` in the data type return kind is the same `r`
+   as in the data constructor.
+
+===================================================
+== Wrinkle: normalizeMbKind argument unification ==
+===================================================
+
+Here is a slightly more involved example:
+
+  type T2 :: TYPE r1 -> TYPE r1
+  newtype T2 (a :: TYPE r2) = MkT2 a
+
+Here, we must use `reifyType` in `normalizeMbKind` to determine that the return
+kind is `TYPE r1`. But we must be careful here: `r1` is actually the same type
+variable as `r2`! We don't want to accidentally end up quantifying over the two
+variables separately in `datatypeInstVars`, since they're really one and the
+same.
+
+We accomplish this by doing the following:
+
+1. After calling `reifyKind` in `normalizeMbKind`, split the result kind into
+   as many arguments as there are visible binders in the data type declaration.
+   In the `T2` example above, there is exactly one visible binder in
+   `newtype T2 a`, so we split the kind `TYPE r1 -> TYPE r1` by one argument to
+   get ([TYPE r1], TYPE r1). See `unravelKindUpTo` for how this splitting logic
+   is implemented.
+2. We then unify the argument kinds resuling from the splitting in the previous
+   step with the corresponding kinds from the data type declaration. In the
+   example above, the split argument kind is `TYPE r1`, and the binder in the
+   declaration has kind `TYPE r2`, so we unify `TYPE r1` with `TYPE r2` using
+   `mergeArgumentKinds` to get a substitution [r1 :-> r2].
+3. We then apply the substitution from the previous step to the rest of the
+   kind. In the example above, that means we apply the [r1 :-> r2] substitution
+   to `TYPE r1` to obtain `TYPE r2`.
+
+The payoff is that everything consistently refers to `r2`, rather than the mix
+of `r1` and `r2` as before.
+-}
 
 -- | Create new kind variable binder names corresponding to the return kind of
 -- a data type. This is useful when you have a data type like:
@@ -766,9 +960,76 @@ normalizeDecFor isReified dec =
 mkExtraKindBinders :: Kind -> Q [TyVarBndrUnit]
 mkExtraKindBinders kind = do
   kind' <- resolveKindSynonyms kind
-  let (_, _, args :|- _) = uncurryKind kind'
-  names <- replicateM (length args) (newName "x")
-  return $ zipWith kindedTV names args
+  let (args, _) = unravelKind kind'
+  (extra_kvbs, _) <- mkExtraFunArgForalls args
+  return extra_kvbs
+
+-- | Take the supplied function kind arguments ('FunArgs') and do two things:
+--
+-- 1. For each 'FAAnon' with kind @k@, generate a fresh name @a@ and return
+--    the 'TyVarBndr' @a :: k@. Also return each visible @forall@ in an
+--    'FAForalls' as a 'TyVarBndr'. (This is what the list of 'TyVarBndrUnit's
+--    in the return type consists of.)
+--
+-- 2. Return a new 'FunArgs' value where each 'FAAnon' has been replaced with
+--    @'FAForalls' ('ForallVis' [a :: k])@, where @a :: k@ the corresponding
+--    'TyVarBndr' computed in step (1).
+--
+-- As an example, consider this function kind:
+--
+-- @
+-- forall k. k -> Type -> Type
+-- @
+--
+-- After splitting this kind into its 'FunArgs':
+--
+-- @
+-- ['FAForalls' ('ForallInvis' [k]), 'FAAnon' k, 'FAAnon' Type]
+-- @
+--
+-- Calling 'mkExtraFunArgForalls' on this 'FunArgs' value would return:
+--
+-- @
+-- ( [a :: k, b :: Type]
+-- , [ 'FAForalls' ('ForallInvis' [k])
+--   , 'FAForalls' ('ForallVis' [a :: k])
+--   , 'FAForalls' ('ForallVis' [b :: Type])
+--   ]
+-- )
+-- @
+--
+-- Where @a@ and @b@ are fresh.
+--
+-- This function is used in two places:
+--
+-- 1. As the workhorse for 'mkExtraKindBinders'.
+--
+-- 2. In 'normalizeDecFor', as part of computing the 'datatypeInstVars' and as
+--    part of eta expanding the explicit return kind.
+mkExtraFunArgForalls :: FunArgs -> Q ([TyVarBndrUnit], FunArgs)
+mkExtraFunArgForalls FANil =
+  return ([], FANil)
+mkExtraFunArgForalls (FAForalls tele args) = do
+  (extra_vis_tvbs', args') <- mkExtraFunArgForalls args
+  case tele of
+    ForallVis tvbs ->
+      return ( tvbs ++ extra_vis_tvbs'
+             , FAForalls (ForallVis tvbs) args'
+             )
+    ForallInvis tvbs ->
+      return ( extra_vis_tvbs'
+             , FAForalls (ForallInvis tvbs) args'
+             )
+mkExtraFunArgForalls (FACxt ctxt args) = do
+  (extra_vis_tvbs', args') <- mkExtraFunArgForalls args
+  return (extra_vis_tvbs', FACxt ctxt args')
+mkExtraFunArgForalls (FAAnon anon args) = do
+  name <- newName "x"
+  let tvb = kindedTV name anon
+  (extra_vis_tvbs', args') <- mkExtraFunArgForalls args
+  return ( tvb : extra_vis_tvbs'
+         , FAForalls (ForallVis [tvb]) args'
+         )
 
 -- | Is a declaration for a @data instance@ or @newtype instance@?
 isFamInstVariant :: DatatypeVariant -> Bool
@@ -778,15 +1039,32 @@ isFamInstVariant dv =
     Newtype         -> False
     DataInstance    -> True
     NewtypeInstance -> True
+    TypeData        -> False
 
 bndrParams :: [TyVarBndr_ flag] -> [Type]
-bndrParams = map $ elimTV VarT (\n k -> SigT (VarT n) k)
+bndrParams = map bndrParam
+
+bndrParam :: TyVarBndr_ flag -> Type
+bndrParam = elimTV VarT (\n k -> SigT (VarT n) k)
+
+-- | Returns 'True' if the flag of the supplied 'TyVarBndrVis' is 'BndrReq'.
+isRequiredTvb :: TyVarBndrVis -> Bool
+#if __GLASGOW_HASKELL__ >= 708
+isRequiredTvb tvb = tvFlag tvb == BndrReq
+#else
+isRequiredTvb _ = True
+#endif
 
 -- | Remove the outermost 'SigT'.
 stripSigT :: Type -> Type
 stripSigT (SigT t _) = t
 stripSigT t          = t
 
+-- | If the supplied 'Type' is a @'SigT' _ k@, return @'Just' k@. Otherwise,
+-- return 'Nothing'.
+sigTMaybeKind :: Type -> Maybe Kind
+sigTMaybeKind (SigT _ k) = Just k
+sigTMaybeKind _          = Nothing
 
 normalizeDec' ::
   IsReifiedDec    {- ^ Is this a reified 'Dec'? -} ->
@@ -794,17 +1072,19 @@ normalizeDec' ::
   Name            {- ^ Type constructor         -} ->
   [TyVarBndrUnit] {- ^ Type parameters          -} ->
   [Type]          {- ^ Argument types           -} ->
+  Kind            {- ^ Result kind              -} ->
   [Con]           {- ^ Constructors             -} ->
   DatatypeVariant {- ^ Extra information        -} ->
   Q DatatypeInfo
-normalizeDec' reifiedDec context name params instTys cons variant =
-  do cons' <- concat <$> mapM (normalizeConFor reifiedDec name params instTys variant) cons
+normalizeDec' reifiedDec context name params instTys resKind cons variant =
+  do cons' <- concat <$> mapM (normalizeConFor reifiedDec name params instTys resKind variant) cons
      return DatatypeInfo
        { datatypeContext   = context
        , datatypeName      = name
        , datatypeVars      = params
        , datatypeInstTypes = instTys
        , datatypeCons      = cons'
+       , datatypeReturnKind = resKind
        , datatypeVariant   = variant
        }
 
@@ -816,6 +1096,7 @@ normalizeCon ::
   Name            {- ^ Type constructor  -} ->
   [TyVarBndrUnit] {- ^ Type parameters   -} ->
   [Type]          {- ^ Argument types    -} ->
+  Kind            {- ^ Result kind       -} ->
   DatatypeVariant {- ^ Extra information -} ->
   Con             {- ^ Constructor       -} ->
   Q [ConstructorInfo]
@@ -826,10 +1107,11 @@ normalizeConFor ::
   Name            {- ^ Type constructor         -} ->
   [TyVarBndrUnit] {- ^ Type parameters          -} ->
   [Type]          {- ^ Argument types           -} ->
+  Kind            {- ^ Result kind              -} ->
   DatatypeVariant {- ^ Extra information        -} ->
   Con             {- ^ Constructor              -} ->
   Q [ConstructorInfo]
-normalizeConFor reifiedDec typename params instTys variant =
+normalizeConFor reifiedDec typename params instTys resKind variant =
   fmap (map (giveCIVarsStarKinds reifiedDec)) . dispatch
   where
     -- A GADT constructor is declared infix when:
@@ -917,7 +1199,7 @@ normalizeConFor reifiedDec typename params instTys variant =
                     gadtCase ns innerType (takeFieldTypes xs) stricts
                              (const $ return $ RecordConstructor fns)
                 where
-                  gadtCase = normalizeGadtC typename params instTys tyvars context
+                  gadtCase = normalizeGadtC typename params instTys resKind tyvars context
 #endif
 #if MIN_VERSION_template_haskell(2,8,0) && (!MIN_VERSION_template_haskell(2,10,0))
           dataFamCompatCase :: Con -> Q [ConstructorInfo]
@@ -957,7 +1239,7 @@ normalizeConFor reifiedDec typename params instTys variant =
                 -- make the task of substituting those types with the variables
                 -- we put in place of the eta-reduced variables
                 -- (in normalizeDec) much easier.
-                normalizeGadtC typename params instTys tyvars context [n]
+                normalizeGadtC typename params instTys resKind tyvars context [n]
                                returnTy' argTys stricts (const $ return variant)
               _ -> fail $ unlines
                      [ "normalizeCon: Cannot reify constructor " ++ nameBase n
@@ -1040,6 +1322,7 @@ normalizeGadtC ::
   Name              {- ^ Type constructor             -} ->
   [TyVarBndrUnit]   {- ^ Type parameters              -} ->
   [Type]            {- ^ Argument types               -} ->
+  Kind              {- ^ Result kind                  -} ->
   [TyVarBndrUnit]   {- ^ Constructor parameters       -} ->
   Cxt               {- ^ Constructor context          -} ->
   [Name]            {- ^ Constructor names            -} ->
@@ -1050,7 +1333,7 @@ normalizeGadtC ::
                     {- ^ Determine a constructor variant
                          from its 'Name' -}              ->
   Q [ConstructorInfo]
-normalizeGadtC typename params instTys tyvars context names innerType
+normalizeGadtC typename params instTys resKind tyvars context names innerType
                fields stricts getVariant =
   do -- It's possible that the constructor has implicitly quantified type
      -- variables, such as in the following example (from #58):
@@ -1086,13 +1369,34 @@ normalizeGadtC typename params instTys tyvars context names innerType
          renamedFields    = applySubstitution conSubst' fields
 
      innerType' <- resolveTypeSynonyms renamedInnerType
-     case decomposeType innerType' of
+
+     -- If the return type in the data constructor is of the form `T :: K`, then
+     -- return (T, Just K, Just resKind), where `resKind` is the result kind of
+     -- the parent data type. Otherwise, return (T :: K, Nothing, Nothing). The
+     -- two `Maybe` values are passed below to `mergeArgumentKinds` such that if
+     -- they are both `Just`, then we will attempt to unify `K` and `resKind`.
+     -- See step (2) of Note [Tricky result kinds].
+     let (innerType'', mbInnerResKind, mbResKind) =
+           case innerType' of
+             SigT t innerResKind -> (t, Just innerResKind, Just resKind)
+             _                   -> (innerType', Nothing, Nothing)
+
+     case decomposeType innerType'' of
        ConT innerTyCon :| ts | typename == innerTyCon ->
 
-         let (substName, context1) =
+         let -- See step (2) of Note [Tricky result kinds].
+#if MIN_VERSION_template_haskell(2,8,0)
+             instTys' = maybeToList mbResKind ++ instTys
+             ts' = maybeToList mbInnerResKind ++ ts
+#else
+             instTys' = instTys
+             ts' = ts
+#endif
+
+             (substName, context1) =
                closeOverKinds (kindsOfFVsOfTvbs renamedTyvars)
                               (kindsOfFVsOfTvbs params)
-                              (mergeArguments instTys ts)
+                              (mergeArguments instTys' ts')
              subst    = VarT <$> substName
              exTyvars = [ tv | tv <- renamedTyvars, Map.notMember (tvName tv) subst ]
 
@@ -1479,29 +1783,233 @@ uncurryType = go [] [] []
     go tvbs ctxt args (ForallT tvbs' ctxt' t)    = go (tvbs++tvbs') (ctxt++ctxt') args t
     go tvbs ctxt args t                          = (tvbs, ctxt, reverse args :|- t)
 
--- | Decompose a function kind into its context, argument kinds,
--- and return kind. For instance, this
---
---  forall a b. Maybe a -> Maybe b -> Type
---
--- becomes
---
---   ([a, b], [], [Maybe a, Maybe b] :|- Type)
-uncurryKind :: Kind -> ([TyVarBndrSpec], Cxt, NonEmptySnoc Kind)
-#if MIN_VERSION_template_haskell(2,8,0)
-uncurryKind = uncurryType
-#else
-uncurryKind = go []
-  where
-    go args (ArrowK k1 k2) = go (k1:args) k2
-    go args StarK          = ([], [], reverse args :|- StarK)
-#endif
-
 -- Reconstruct a function type from its type variable binders, context,
 -- argument types and return type.
 curryType :: [TyVarBndrSpec] -> Cxt -> [Type] -> Type -> Type
 curryType tvbs ctxt args res =
   ForallT tvbs ctxt $ foldr (\arg t -> ArrowT `AppT` arg `AppT` t) res args
+
+-- All of the code from @ForallTelescope@ through @unravelType@ is taken from
+-- the @th-desugar@ library, which is licensed under a 3-Clause BSD license.
+
+-- | The type variable binders in a @forall@. This is not used by the TH AST
+-- itself, but this is used as an intermediate data type in 'FAForalls'.
+data ForallTelescope
+  = ForallVis [TyVarBndrUnit]
+    -- ^ A visible @forall@ (e.g., @forall a -> {...}@).
+    --   These do not have any notion of specificity, so we use
+    --   '()' as a placeholder value in the 'TyVarBndr's.
+  | ForallInvis [TyVarBndrSpec]
+    -- ^ An invisible @forall@ (e.g., @forall a {b} c -> {...}@),
+    --   where each binder has a 'Specificity'.
+
+-- | The list of arguments in a function 'Type'.
+data FunArgs
+  = FANil
+    -- ^ No more arguments.
+  | FAForalls ForallTelescope FunArgs
+    -- ^ A series of @forall@ed type variables followed by a dot (if
+    --   'ForallInvis') or an arrow (if 'ForallVis'). For example,
+    --   the type variables @a1 ... an@ in @forall a1 ... an. r@.
+  | FACxt Cxt FunArgs
+    -- ^ A series of constraint arguments followed by @=>@. For example,
+    --   the @(c1, ..., cn)@ in @(c1, ..., cn) => r@.
+  | FAAnon Kind FunArgs
+    -- ^ An anonymous argument followed by an arrow. For example, the @a@
+    --   in @a -> r@.
+
+-- | A /visible/ function argument type (i.e., one that must be supplied
+-- explicitly in the source code). This is in contrast to /invisible/
+-- arguments (e.g., the @c@ in @c => r@), which are instantiated without
+-- the need for explicit user input.
+data VisFunArg
+  = VisFADep TyVarBndrUnit
+    -- ^ A visible @forall@ (e.g., @forall a -> a@).
+  | VisFAAnon Kind
+    -- ^ An anonymous argument followed by an arrow (e.g., @a -> r@).
+
+#if MIN_VERSION_template_haskell(2,8,0)
+-- | Decompose a function 'Type' into its arguments (the 'FunArgs') and its
+-- result type (the 'Type).
+unravelType :: Type -> (FunArgs, Type)
+unravelType (ForallT tvbs cxt ty) =
+  let (args, res) = unravelType ty in
+  (FAForalls (ForallInvis tvbs) (FACxt cxt args), res)
+unravelType (AppT (AppT ArrowT t1) t2) =
+  let (args, res) = unravelType t2 in
+  (FAAnon t1 args, res)
+# if __GLASGOW_HASKELL__ >= 809
+unravelType (ForallVisT tvbs ty) =
+  let (args, res) = unravelType ty in
+  (FAForalls (ForallVis tvbs) args, res)
+# endif
+unravelType t = (FANil, t)
+
+-- | Reconstruct an arrow 'Type' from its argument and result types.
+ravelType :: FunArgs -> Type -> Type
+ravelType FANil res = res
+-- We need a special case for FAForalls ForallInvis followed by FACxt so that we may
+-- collapse them into a single ForallT when raveling.
+ravelType (FAForalls (ForallInvis tvbs) (FACxt p args)) res =
+  ForallT tvbs p (ravelType args res)
+ravelType (FAForalls (ForallInvis  tvbs)  args)  res = ForallT tvbs [] (ravelType args res)
+ravelType (FAForalls (ForallVis   _tvbs) _args) _res =
+#if __GLASGOW_HASKELL__ >= 809
+      ForallVisT _tvbs (ravelType _args _res)
+#else
+      error "Visible dependent quantification supported only on GHC 8.10+"
+#endif
+ravelType (FACxt cxt args) res = ForallT [] cxt (ravelType args res)
+ravelType (FAAnon t args)  res = AppT (AppT ArrowT t) (ravelType args res)
+
+-- | Convert a 'FunArg's value into the list of 'Type's that it contains.
+-- For example, given this function type:
+--
+-- @
+-- forall k (a :: k). Proxy a -> forall b. Maybe b
+-- @
+--
+-- Then calling @funArgTys@ on the arguments would yield:
+--
+-- @
+-- [k, (a :: k), Proxy a, b, Maybe b]
+-- @
+--
+-- This is primarily used for the purposes of computing all of the type
+-- variables that appear in a 'FunArgs' value.
+funArgTys :: FunArgs -> [Type]
+funArgTys FANil = []
+funArgTys (FAForalls tele args) =
+  forallTelescopeTys tele ++ funArgTys args
+# if __GLASGOW_HASKELL__ >= 800
+funArgTys (FACxt ctxt args) =
+  ctxt ++ funArgTys args
+# else
+funArgTys (FACxt {}) =
+  error "Constraints in kinds not supported prior to GHC 8.0"
+# endif
+funArgTys (FAAnon anon args) =
+  anon : funArgTys args
+
+-- | Convert a 'ForallTelescope' value into the list of 'Type's that it
+-- contains. See the Haddocks for 'funArgTys' for an example of what this does.
+forallTelescopeTys :: ForallTelescope -> [Type]
+forallTelescopeTys (ForallVis tvbs)   = bndrParams tvbs
+forallTelescopeTys (ForallInvis tvbs) = bndrParams tvbs
+#endif
+
+-- | Reconstruct an arrow 'Kind' from its argument and result kinds.
+ravelKind :: FunArgs -> Kind -> Kind
+#if MIN_VERSION_template_haskell(2,8,0)
+ravelKind = ravelType
+#else
+ravelKind FANil res = res
+ravelKind (FAAnon k args) res = ArrowK k (ravelKind args res)
+ravelKind (FAForalls {}) _res =
+  error "TH doesn't support `forall`s in kinds prior to template-haskell-2.8.0.0"
+ravelKind (FACxt {}) _res =
+  error "TH doesn't support contexts in kinds prior to template-haskell-2.8.0.0"
+#endif
+
+-- | Decompose a function 'Kind' into its arguments (the 'FunArgs') and its
+-- result type (the 'Kind).
+unravelKind :: Kind -> (FunArgs, Kind)
+#if MIN_VERSION_template_haskell(2,8,0)
+unravelKind = unravelType
+#else
+unravelKind (ArrowK k1 k2) =
+  let (args, res) = unravelKind k2 in
+  (FAAnon k1 args, res)
+unravelKind StarK =
+  (FANil, StarK)
+#endif
+
+-- | @'filterVisFunArgsUpTo' xs args@ will split @args@ into 'VisFunArg's as
+-- many times as there are elements in @xs@, pairing up each entry in @xs@ with
+-- the corresponding 'VisFunArg' in the process. This will stop after the last
+-- entry in @xs@ has been paired up.
+--
+-- For example, this:
+--
+-- @
+-- 'filterVisFunArgsUpTo'
+--   [Bool, True]
+--   [ FAForalls (ForallVis [j])
+--   , FAAnon j
+--   , FAForalls (ForallInvis [k])
+--   , FAAnon k
+--   ]
+-- @
+--
+-- Will yield:
+--
+-- @
+-- ( [(Bool, VisFADep j), (True, VisFAAnon j)]
+-- , [FAForalls (ForallInvis [k]), FAAnon k]
+-- )
+-- @
+--
+-- This function assumes the precondition that there are at least as many
+-- visible function arguments in @args@ as there are elements in @xs@. If this
+-- is not the case, this function will raise an error.
+filterVisFunArgsUpTo :: forall a. [a] -> FunArgs -> ([(a, VisFunArg)], FunArgs)
+filterVisFunArgsUpTo = go_fun_args
+  where
+    go_fun_args :: [a] -> FunArgs -> ([(a, VisFunArg)], FunArgs)
+    go_fun_args [] args =
+      ([], args)
+    go_fun_args (_:_) FANil =
+      error "filterVisFunArgsUpTo.go_fun_args: Too few FunArgs"
+    go_fun_args xs (FACxt _ args) =
+      go_fun_args xs args
+    go_fun_args (x:xs) (FAAnon t args) =
+      let (xs', args') = go_fun_args xs args in
+      ((x, VisFAAnon t):xs', args')
+    go_fun_args xs (FAForalls tele args) =
+      case tele of
+        ForallVis tvbs ->
+          go_vis_tvbs tvbs xs args
+        ForallInvis _ ->
+          go_fun_args xs args
+
+    go_vis_tvbs :: [TyVarBndrUnit] -> [a] -> FunArgs -> ([(a, VisFunArg)], FunArgs)
+    go_vis_tvbs [] xs args =
+      go_fun_args xs args
+    go_vis_tvbs (tvb:tvbs) (x:xs) args =
+      let (xs', args') = go_vis_tvbs tvbs xs args in
+      ((x, VisFADep tvb):xs', args')
+    go_vis_tvbs tvbs [] args =
+      ([], FAForalls (ForallVis tvbs) args)
+
+-- | @'unravelKindUpTo' xs k@ will split the function kind @k@ into its argument
+-- kinds @args@ and result kind @res@, and then it will call
+-- @'filterVisFunArgsUpTo' xs args@. The leftover arguments that were not split
+-- apart by 'filterVisFunArgsUpTo' are then raveled back into @res@.
+--
+-- For example, this:
+--
+-- @
+-- 'filterVisFunArgsUpTo'
+--   [Bool, True]
+--   (forall j -> j -> forall k. k -> Type)
+-- @
+--
+-- Will yield:
+--
+-- @
+-- ( [(Bool, VisFADep j), (True, VisFAAnon j)]
+-- , forall k. k -> Type
+-- )
+-- @
+--
+-- This function assumes the precondition that there are at least as many
+-- visible function arguments in @args@ as there are elements in @xs@. If this
+-- is not the case, this function will raise an error.
+unravelKindUpTo :: [a] -> Kind -> ([(a, VisFunArg)], Kind)
+unravelKindUpTo xs k = (xs', ravelKind args' res)
+  where
+    (args, res) = unravelKind k
+    (xs', args') = filterVisFunArgsUpTo xs args
 
 -- | Resolve any infix type application in a type using the fixities that
 -- are currently available. Starting in `template-haskell-2.11` types could
@@ -2144,11 +2652,11 @@ repair13618 info =
 
 -- | Backward compatible version of 'dataD'
 dataDCompat ::
-  CxtQ            {- ^ context                 -} ->
-  Name            {- ^ type constructor        -} ->
-  [TyVarBndrUnit] {- ^ type parameters         -} ->
-  [ConQ]          {- ^ constructor definitions -} ->
-  [Name]          {- ^ derived class names     -} ->
+  CxtQ           {- ^ context                 -} ->
+  Name           {- ^ type constructor        -} ->
+  [TyVarBndrVis] {- ^ type parameters         -} ->
+  [ConQ]         {- ^ constructor definitions -} ->
+  [Name]         {- ^ derived class names     -} ->
   DecQ
 #if MIN_VERSION_template_haskell(2,12,0)
 dataDCompat c n ts cs ds =
@@ -2164,11 +2672,11 @@ dataDCompat = dataD
 
 -- | Backward compatible version of 'newtypeD'
 newtypeDCompat ::
-  CxtQ            {- ^ context                 -} ->
-  Name            {- ^ type constructor        -} ->
-  [TyVarBndrUnit] {- ^ type parameters         -} ->
-  ConQ            {- ^ constructor definition  -} ->
-  [Name]          {- ^ derived class names     -} ->
+  CxtQ           {- ^ context                 -} ->
+  Name           {- ^ type constructor        -} ->
+  [TyVarBndrVis] {- ^ type parameters         -} ->
+  ConQ           {- ^ constructor definition  -} ->
+  [Name]         {- ^ derived class names     -} ->
   DecQ
 #if MIN_VERSION_template_haskell(2,12,0)
 newtypeDCompat c n ts cs ds =
